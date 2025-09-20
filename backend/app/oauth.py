@@ -17,7 +17,7 @@ def get_env_cfg() -> Dict[str, Optional[str]]:
         "client_id": os.getenv("FIGMA_CLIENT_ID"),
         "client_secret": os.getenv("FIGMA_CLIENT_SECRET"),
         "redirect_uri": os.getenv("FIGMA_REDIRECT_URI"),
-        "scope": os.getenv("FIGMA_OAUTH_SCOPE", "file_read projects:read organization:read"),
+        "scope": os.getenv("FIGMA_OAUTH_SCOPE", "file_read profile_read"),
     }
 
 

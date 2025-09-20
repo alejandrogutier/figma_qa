@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import re
 from typing import Any, Dict, Iterable, List, Tuple
 import logging
 
 import httpx
-from tenacity import retry, wait_exponential_jitter, stop_after_attempt, retry_if_exception_type
+from tenacity import RetryError, retry, wait_exponential_jitter, stop_after_attempt, retry_if_exception_type
 
 
 FIGMA_API = "https://api.figma.com/v1"
@@ -74,6 +73,12 @@ async def get_file(client: httpx.AsyncClient, token: str, file_key: str) -> Dict
     return await _get_json(client, url, _auth_headers(token))
 
 
+async def get_me(client: httpx.AsyncClient, token: str) -> Dict[str, Any]:
+    """Obtiene información del usuario autenticado y equipos asociados."""
+    url = f"{FIGMA_API}/me"
+    return await _get_json(client, url, _auth_headers(token))
+
+
 def _extract_pages(file_json: Dict[str, Any]) -> List[Tuple[str, str]]:
     """Devuelve lista de (page_name, page_id)."""
     document = file_json.get("document") or {}
@@ -133,9 +138,77 @@ async def list_pages(client: httpx.AsyncClient, token: str, file_key: str) -> Li
 
 
 async def list_user_teams(client: httpx.AsyncClient, token: str) -> List[Dict[str, Any]]:
-    url = f"{FIGMA_API}/me/teams"
-    data = await _get_json(client, url, _auth_headers(token))
-    return data.get("teams") or []
+    teams: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _add_team(team_info: Dict[str, Any]) -> None:
+        team_id = team_info.get("id") or team_info.get("team_id") or team_info.get("teamId")
+        if not team_id:
+            return
+        sid = str(team_id)
+        if sid in seen:
+            return
+        seen.add(sid)
+        teams.append({
+            "id": sid,
+            "name": team_info.get("name"),
+            "role": team_info.get("role"),
+        })
+
+    async def _load_legacy() -> None:
+        url = f"{FIGMA_API}/me/teams"
+        data = await _get_json(client, url, _auth_headers(token))
+        legacy_teams = data.get("teams") or []
+        if isinstance(legacy_teams, list):
+            for item in legacy_teams:
+                if isinstance(item, dict):
+                    _add_team(item)
+                elif isinstance(item, str):
+                    _add_team({"id": item})
+
+    try:
+        me = await get_me(client, token)
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        if status in (403, 404):
+            try:
+                await _load_legacy()
+            except httpx.HTTPStatusError:
+                raise exc
+            return teams
+        raise
+
+    raw_teams = me.get("teams")
+    if isinstance(raw_teams, list):
+        for item in raw_teams:
+            if isinstance(item, dict):
+                _add_team(item)
+            elif isinstance(item, str):
+                _add_team({"id": item})
+
+    # Algunos tenants devuelven teams incrustados dentro de organizaciones
+    orgs = me.get("organizations")
+    if isinstance(orgs, list):
+        for org in orgs:
+            if not isinstance(org, dict):
+                continue
+            org_teams = org.get("teams")
+            if isinstance(org_teams, list):
+                for org_team in org_teams:
+                    if isinstance(org_team, dict):
+                        _add_team(org_team)
+
+    # Compatibilidad con payloads que solo exponen ids
+    fallback_ids = me.get("teamIds") or me.get("team_ids")
+    if isinstance(fallback_ids, list):
+        for tid in fallback_ids:
+            if isinstance(tid, (str, int)):
+                _add_team({"id": str(tid)})
+
+    if not teams:
+        await _load_legacy()
+
+    return teams
 
 
 async def list_team_projects(client: httpx.AsyncClient, token: str, team_id: str) -> List[Dict[str, Any]]:
@@ -190,6 +263,85 @@ async def list_figma_files(
                 }
             )
     return output
+
+
+async def list_all_accessible_files(
+    client: httpx.AsyncClient,
+    token: str,
+) -> Dict[str, Any]:
+    """Enumera todos los archivos accesibles agrupando proyectos por equipo.
+
+    Devuelve un diccionario con listas de equipos, archivos y errores recopilados.
+    Cada entrada de archivo incluye metadatos del proyecto y equipo correspondientes.
+    """
+
+    teams = await list_user_teams(client, token)
+    errors: List[str] = []
+    files: List[Dict[str, Any]] = []
+
+    def _friendly_error(kind: str, identifier: str, exc: Exception) -> str:
+        status: int | None = None
+        if isinstance(exc, RetryError):
+            last_exc = exc.last_attempt.exception()
+            if isinstance(last_exc, httpx.HTTPStatusError) and last_exc.response is not None:
+                status = last_exc.response.status_code
+        elif isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+            status = exc.response.status_code
+
+        if status == 403:
+            return f"{kind} {identifier}: token sin permisos (HTTP 403)"
+        if status == 404:
+            return f"{kind} {identifier}: recurso no encontrado o sin acceso (HTTP 404)"
+        return f"{kind} {identifier}: {exc}"
+
+    for team in teams:
+        team_id = team.get("id")
+        if not team_id:
+            continue
+        try:
+            projects = await list_team_projects(client, token, team_id)
+        except (httpx.HTTPStatusError, RetryError) as exc:
+            errors.append(_friendly_error("Equipo", str(team_id), exc))
+            continue
+        except Exception as exc:  # pragma: no cover - defensivo
+            errors.append(f"Equipo {team_id}: error al listar proyectos: {exc}")
+            continue
+
+        for project in projects:
+            project_id = project.get("id") or project.get("project_id")
+            if not project_id:
+                continue
+            try:
+                project_files = await list_project_files(client, token, project_id)
+            except (httpx.HTTPStatusError, RetryError) as exc:
+                errors.append(_friendly_error("Proyecto", str(project_id), exc))
+                continue
+            except Exception as exc:  # pragma: no cover - defensivo
+                errors.append(f"Proyecto {project_id}: error al listar archivos: {exc}")
+                continue
+
+            for file_item in project_files:
+                files.append(
+                    {
+                        "team": {
+                            "id": team_id,
+                            "name": team.get("name"),
+                            "role": team.get("role"),
+                        },
+                        "project": {
+                            "id": project_id,
+                            "name": project.get("name"),
+                        },
+                        "file": {
+                            "key": file_item.get("key"),
+                            "name": file_item.get("name"),
+                            "thumbnail_url": file_item.get("thumbnail_url"),
+                            "last_modified": file_item.get("last_modified"),
+                        },
+                    }
+                )
+
+    return {"teams": teams, "files": files, "errors": errors}
 
 
 def _collect_sections_and_frames(doc: Dict[str, Any]) -> Dict[str, List[Tuple[str, str]]]:

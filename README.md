@@ -101,7 +101,7 @@ Variables opcionales en `backend/.env` para ajustar seccionado/agrupado:
 
 ### OAuth con Figma (opcional)
 
-1) Configura en Figma tu app con `redirect_uri` = `http://localhost:8000/oauth/figma/callback` y copia `client_id` y `client_secret` a `.env`.
+1) Configura en Figma tu app con `redirect_uri` = `http://localhost:8000/oauth/figma/callback` y copia `client_id` y `client_secret` a `.env`. Selecciona, al menos, los scopes `file_read` y `profile_read` (agrega `organization:read` si tu organización lo exige).
 2) Inicia el flujo:
 
 ```bash
@@ -117,6 +117,16 @@ curl "http://localhost:8000/oauth/figma/callback?code=...&state=abc123"
 ```
 
 El backend está configurado para redirigir a `http://localhost:5173/oauth/figma/callback` con los tokens como query. El frontend guarda el `access_token` en localStorage y lo usa como `Authorization: Bearer` al llamar `/analyze`.
+
+### Historial de archivos
+
+- `GET /history/files`: devuelve los archivos Figma analizados previamente, ordenados por la ejecución más reciente. Cada entrada incluye `file_key`, `figma_url`, número de ejecuciones y el `analysis_id` del último run, lo que permite reabrir resultados desde el frontend sin volver a consultar a la API de Figma.
+- El frontend consume este endpoint para poblar la sección "Historial de archivos analizados" y facilitar reusar archivos sin depender de OAuth ni scopes adicionales.
+
+### Gestión de resultados
+
+- `DELETE /analyses/{analysis_id}/cases/{case_id}`: elimina un caso puntual del análisis almacenado, actualizando el conteo total sin afectar el resto de resultados.
+- `GET /analyses/{analysis_id}/export`: genera al vuelo un Excel con los casos actuales del análisis para descargarlo desde la interfaz.
 
 Para refrescar tokens:
 

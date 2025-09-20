@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Iterable, Optional
+from typing import Iterable, Optional, List, Dict, Any, Tuple
 
 from sqlalchemy import func
 from sqlmodel import Session, select
@@ -111,6 +111,105 @@ def get_analysis_summary_by_file(file_keys: Optional[Iterable[str]] = None) -> d
                 "last_analysis_id": int(last_run_id) if last_run_id else None,
             }
         return summary
+
+
+def list_recent_files(limit: int = 100) -> List[Dict[str, Any]]:
+    """Devuelve los archivos analizados previamente ordenados por última ejecución."""
+
+    with Session(engine) as session:
+        stmt = (
+            select(
+                AnalysisRun.file_key,
+                func.count(AnalysisRun.id),
+                func.max(AnalysisRun.created_at),
+                func.max(AnalysisRun.id),
+            )
+            .group_by(AnalysisRun.file_key)
+            .order_by(func.max(AnalysisRun.created_at).desc())
+        )
+        if limit:
+            stmt = stmt.limit(limit)
+        aggregates = session.exec(stmt).all()
+
+        last_ids = [int(last_run_id) for _, _, _, last_run_id in aggregates if last_run_id is not None]
+        runs_by_id: Dict[int, AnalysisRun] = {}
+        if last_ids:
+            runs = session.exec(select(AnalysisRun).where(AnalysisRun.id.in_(last_ids))).all()
+            runs_by_id = {run.id: run for run in runs}
+
+        output: List[Dict[str, Any]] = []
+        for file_key, runs, last_run_at, last_run_id in aggregates:
+            if not file_key:
+                continue
+            last_run_id_int = int(last_run_id) if last_run_id is not None else None
+            last_run = runs_by_id.get(last_run_id_int) if last_run_id_int else None
+            output.append(
+                {
+                    "file_key": file_key,
+                    "figma_url": last_run.figma_url if last_run else None,
+                    "runs": int(runs or 0),
+                    "last_run_at": last_run_at.isoformat() if last_run_at else None,
+                    "last_analysis_id": last_run_id_int,
+                    "last_model": last_run.model if last_run else None,
+                    "analysis_level": last_run.analysis_level if last_run else None,
+                }
+            )
+        return output
+
+
+def get_case(case_id: int) -> Optional[StoredTestCase]:
+    with Session(engine) as session:
+        return session.get(StoredTestCase, case_id)
+
+
+def delete_case(case_id: int) -> bool:
+    with Session(engine) as session:
+        case = session.get(StoredTestCase, case_id)
+        if not case:
+            return False
+        run = session.get(AnalysisRun, case.run_id) if case.run_id else None
+        session.delete(case)
+        if run:
+            run.total_cases = max((run.total_cases or 0) - 1, 0)
+            run.updated_at = datetime.utcnow()
+            session.add(run)
+        session.commit()
+        return True
+
+
+def _to_gpt_case(data: Dict[str, Any]) -> GPTCase:
+    try:
+        return GPTCase.model_validate(data)
+    except AttributeError:  # pragma: no cover - pydantic < 2
+        return GPTCase.parse_obj(data)  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover - datos incompletos
+        allowed = getattr(GPTCase, "model_fields", None)
+        if allowed:
+            filtered = {k: v for k, v in data.items() if k in allowed}
+        else:  # pragma: no cover - compatibilidad pydantic < 2
+            filtered = {k: v for k, v in data.items() if k in GPTCase.__fields__}
+        return GPTCase(**filtered)  # type: ignore[arg-type]
+
+
+def get_analysis_bundles(run_id: int) -> List[CasesBundle]:
+    with Session(engine) as session:
+        cases = session.exec(
+            select(StoredTestCase)
+            .where(StoredTestCase.run_id == run_id)
+            .order_by(StoredTestCase.bundle_label, StoredTestCase.case_index, StoredTestCase.id)
+        ).all()
+
+    bundles: Dict[Tuple[str, str, str], CasesBundle] = {}
+    for case in cases:
+        key = (case.page_name, case.frame_name, case.node_id)
+        bundle = bundles.get(key)
+        if not bundle:
+            bundle = CasesBundle(page_name=case.page_name, frame_name=case.frame_name, node_id=case.node_id, cases=[])
+            bundles[key] = bundle
+        payload = dict(case.case_data or {})
+        gpt_case = _to_gpt_case(payload)
+        bundle.cases.append(gpt_case)
+    return list(bundles.values())
 
 
 def delete_analysis(run_id: int) -> bool:

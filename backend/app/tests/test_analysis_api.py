@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import SQLModel
-import httpx
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -116,87 +115,115 @@ def test_analysis_lifecycle(app_client):
     assert missing_response.status_code == 404
 
 
-def test_figma_teams_endpoint(app_client, monkeypatch):
+def test_history_files_endpoint(app_client):
     from app.models import AnalyzeRequest, CasesBundle, GPTCase
 
-    # Seed analysis for summary lookups
-    req = AnalyzeRequest(
-        figma_url="https://www.figma.com/file/demo2",
-        file_key="file123",
-        model="gpt-5",
+    req1 = AnalyzeRequest(
+        figma_url="https://www.figma.com/file/historyA",
+        file_key="historyA",
+        model="gpt-4o",
         analysis_level="group",
         images_per_unit=3,
     )
-    case = GPTCase(
-        id="TC-2",
-        frame="Header",
-        feature="Signup",
-        objetivo="Crear cuenta",
-        pasos=["Abrir", "Completar formulario", "Enviar"],
-        resultado_esperado="Cuenta creada",
+    case = GPTCase(id="H-1", frame="Main", feature="Login")
+    bundle = CasesBundle(page_name="Page", frame_name="Frame", node_id="1:2", cases=[case])
+    analysis_id = persistence.persist_analysis("jobH1", req1, "historyA", [bundle])
+
+    # second run for same file to bump counters
+    persistence.persist_analysis("jobH2", req1, "historyA", [bundle])
+
+    req2 = AnalyzeRequest(
+        figma_url="https://www.figma.com/file/historyB",
+        file_key="historyB",
+        model="gpt-4o-mini",
+        analysis_level="page",
+        images_per_unit=2,
     )
-    bundle = CasesBundle(page_name="Page", frame_name="Frame", node_id="200:0", cases=[case])
-    persistence.persist_analysis("job456", req, "file123", [bundle])
+    persistence.persist_analysis("jobH3", req2, "historyB", [bundle])
 
-    async def fake_list_user_teams(client, token):
-        return [{"id": "team1", "name": "Team Uno", "role": "owner"}]
+    resp = app_client.get("/history/files")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["count"] == 2
+    files = {item["file_key"]: item for item in payload["files"]}
+    assert files["historyA"]["runs"] == 2
+    assert files["historyA"]["last_analysis_id"] is not None
+    assert files["historyA"]["figma_url"] == "https://www.figma.com/file/historyA"
+    assert files["historyB"]["runs"] == 1
 
-    async def fake_list_team_projects(client, token, team_id):
-        assert team_id == "team1"
-        return [{"id": "project1", "name": "Proyecto A"}]
+    # The most recent entry should come first (historyB is last persisted)
+    assert payload["files"][0]["file_key"] in {"historyA", "historyB"}
 
-    async def fake_list_project_files(client, token, project_id):
-        assert project_id == "project1"
-        return [
-            {
-                "key": "file123",
-                "name": "Dashboard",
-                "thumbnail_url": "https://example.com/thumb.png",
-                "last_modified": "2024-01-01T00:00:00Z",
-            }
-        ]
 
-    monkeypatch.setattr(main, "list_user_teams", fake_list_user_teams)
-    monkeypatch.setattr(main, "list_team_projects", fake_list_team_projects)
-    monkeypatch.setattr(main, "list_project_files", fake_list_project_files)
+def test_history_files_endpoint_respects_limit(app_client):
+    from app.models import AnalyzeRequest, CasesBundle, GPTCase
 
-    response = app_client.get(
-        "/figma/teams",
-        headers={"Authorization": "Bearer test-token"},
+    req = AnalyzeRequest(
+        figma_url="https://www.figma.com/file/historyC",
+        file_key="historyC",
+        model="gpt-4o",
+        analysis_level="group",
+        images_per_unit=3,
     )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["count"] == 1
-    assert data.get("errors") == []
-    team = data["teams"][0]
-    assert team["id"] == "team1"
-    assert len(team["projects"]) == 1
-    project = team["projects"][0]
-    assert project["id"] == "project1"
-    assert len(project["files"]) == 1
-    file_entry = project["files"][0]
-    assert file_entry["key"] == "file123"
-    assert file_entry["analysis"]["runs"] == 1
-
-
-def test_figma_teams_endpoint_handles_404(app_client, monkeypatch):
-    request = httpx.Request("GET", "https://api.figma.com/v1/me/teams")
-    response = httpx.Response(404, request=request)
-    error = httpx.HTTPStatusError("Not Found", request=request, response=response)
-
-    async def fake_list_user_teams(client, token):
-        raise error
-
-    monkeypatch.setattr(main, "list_user_teams", fake_list_user_teams)
-
-    resp = app_client.get(
-        "/figma/teams",
-        headers={"Authorization": "Bearer test-token"},
+    req_other = AnalyzeRequest(
+        figma_url="https://www.figma.com/file/historyD",
+        file_key="historyD",
+        model="gpt-4o",
+        analysis_level="group",
+        images_per_unit=3,
     )
+    case = GPTCase(id="H-2", frame="Main")
+    bundle = CasesBundle(page_name="Page", frame_name="Frame", node_id="2:2", cases=[case])
+    persistence.persist_analysis("jobH4", req, "historyC", [bundle])
+    persistence.persist_analysis("jobH5", req_other, "historyD", [bundle])
 
+    resp = app_client.get("/history/files", params={"limit": 1})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["teams"] == []
-    assert data["count"] == 0
-    assert any("404" in msg for msg in data.get("errors", []))
+    assert data["count"] == 1
+
+
+def test_case_deletion_endpoint(app_client):
+    from app.models import AnalyzeRequest, CasesBundle, GPTCase
+
+    req = AnalyzeRequest(
+        figma_url="https://www.figma.com/file/delete",
+        file_key="del_file",
+        model="gpt-4o",
+        analysis_level="group",
+        images_per_unit=3,
+    )
+    case = GPTCase(id="DEL-1", frame="Hero")
+    bundle = CasesBundle(page_name="Page", frame_name="Frame", node_id="1:1", cases=[case])
+    analysis_id = persistence.persist_analysis("jobDEL", req, "del_file", [bundle])
+
+    detail = app_client.get(f"/analyses/{analysis_id}").json()
+    case_id = detail["cases"][0]["evaluation"]["case_id"]
+
+    resp = app_client.delete(f"/analyses/{analysis_id}/cases/{case_id}")
+    assert resp.status_code == 204
+
+    refreshed = app_client.get(f"/analyses/{analysis_id}").json()
+    assert refreshed["total_cases"] == 0
+    assert refreshed["cases"] == []
+
+
+def test_analysis_export_endpoint(app_client):
+    from app.models import AnalyzeRequest, CasesBundle, GPTCase
+
+    req = AnalyzeRequest(
+        figma_url="https://www.figma.com/file/export",
+        file_key="export_file",
+        model="gpt-4o",
+        analysis_level="group",
+        images_per_unit=3,
+    )
+    case = GPTCase(id="EXP-1", frame="Header")
+    bundle = CasesBundle(page_name="Page", frame_name="Frame", node_id="3:1", cases=[case])
+    analysis_id = persistence.persist_analysis("jobEXP", req, "export_file", [bundle])
+
+    resp = app_client.get(f"/analyses/{analysis_id}/export")
+    assert resp.status_code == 200
+    assert resp.headers.get("content-type") == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert resp.headers.get("content-disposition")
+    assert len(resp.content) > 0

@@ -6,7 +6,7 @@ import time
 import uuid
 import os
 import tempfile
-from typing import List
+from typing import Any, Dict, List
 
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Query
@@ -23,10 +23,6 @@ from .figma_client import (
     get_nodes_details,
     summarize_frame_document,
     group_frames_by_section_or_prefix,
-    list_figma_files,
-    list_user_teams,
-    list_team_projects,
-    list_project_files,
 )
 from .gpt import generate_cases, generate_cases_for_page, generate_cases_for_group
 from .models import (
@@ -48,11 +44,15 @@ from .persistence import (
     delete_analysis,
     update_case_evaluation,
     get_analysis_summary_by_file,
+    list_recent_files,
+    get_case,
+    delete_case,
+    get_analysis_bundles,
 )
 from .db_models import serialize_case_payload
 from . import db_models  # noqa: F401 - ensure SQLModel tables are registered
 
-from tenacity import RetryError
+
 
 from dotenv import load_dotenv
 
@@ -630,7 +630,10 @@ async def analysis_delete(analysis_id: int):
 
 @app.patch("/analyses/{analysis_id}/cases/{case_id}")
 async def analysis_case_update(analysis_id: int, case_id: int, payload: UpdateCaseRequest):
-    data = payload.model_dump(exclude_unset=True)
+    try:
+        data = payload.model_dump(exclude_unset=True)
+    except AttributeError:  # Compatibilidad con Pydantic < 2
+        data = payload.dict(exclude_unset=True)
     if not data:
         raise HTTPException(status_code=400, detail="No se enviaron campos a actualizar")
     case = update_case_evaluation(
@@ -645,6 +648,16 @@ async def analysis_case_update(analysis_id: int, case_id: int, payload: UpdateCa
     if not case or case.run_id != analysis_id:
         raise HTTPException(status_code=404, detail="Caso no encontrado para este análisis")
     return serialize_case_payload(case)
+
+
+@app.delete("/analyses/{analysis_id}/cases/{case_id}", status_code=204)
+async def analysis_case_delete(analysis_id: int, case_id: int):
+    stored = get_case(case_id)
+    if not stored or stored.run_id != analysis_id:
+        raise HTTPException(status_code=404, detail="Caso no encontrado para este análisis")
+    if not delete_case(case_id):
+        raise HTTPException(status_code=404, detail="Caso no encontrado para este análisis")
+    return Response(status_code=204)
 
 
 @app.post("/analyses/{analysis_id}/rerun")
@@ -728,149 +741,33 @@ async def figma_pages_endpoint(
     }
 
 
-@app.get("/figma/files")
-async def figma_files_endpoint(
-    team_id: str | None = Query(default=None),
-    project_id: str | None = Query(default=None),
-    figma_token: str | None = Query(default=None),
-    authorization: str | None = Header(default=None),
-):
-    token = figma_token
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-    if not token:
-        raise HTTPException(status_code=400, detail="Falta figma_token o Authorization: Bearer")
-    if not team_id and not project_id:
-        raise HTTPException(status_code=400, detail="Debes indicar team_id o project_id")
+@app.get("/history/files")
+async def history_files_endpoint(limit: int = Query(default=100, ge=1, le=500)):
+    files = list_recent_files(limit=limit)
+    return {"files": files, "count": len(files)}
 
-    async with httpx.AsyncClient() as client:
+
+@app.get("/analyses/{analysis_id}/export")
+async def analysis_export(analysis_id: int):
+    analysis = get_analysis_response(analysis_id, include_cases=False)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Análisis no encontrado")
+    bundles = get_analysis_bundles(analysis_id)
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    await asyncio.to_thread(build_workbook, bundles, tmp_path)
+
+    def _cleanup(path: str):
         try:
-            files = await list_figma_files(client, token, project_id=project_id, team_id=team_id)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Error listando archivos: {e}")
+            os.remove(path)
+        except Exception:
+            pass
 
-    file_keys = [f.get("key") for f in files if f.get("key")]
-    summary = get_analysis_summary_by_file(file_keys)
-    enriched = []
-    for f in files:
-        key = f.get("key")
-        item = {
-            "key": key,
-            "name": f.get("name"),
-            "thumbnail_url": f.get("thumbnail_url"),
-            "last_modified": f.get("last_modified"),
-            "project": f.get("project"),
-            "analysis": summary.get(key, {"runs": 0, "last_run_at": None, "last_analysis_id": None}) if key else None,
-        }
-        enriched.append(item)
-    return {"files": enriched, "count": len(enriched)}
-
-
-@app.get("/figma/teams")
-async def figma_teams_endpoint(
-    figma_token: str | None = Query(default=None),
-    authorization: str | None = Header(default=None),
-):
-    token = figma_token
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-    if not token:
-        raise HTTPException(status_code=400, detail="Falta figma_token o Authorization: Bearer")
-
-    def _extract_error(prefix: str, exc: Exception) -> tuple[int, str]:
-        if isinstance(exc, RetryError):
-            last_exc = exc.last_attempt.exception()
-            if isinstance(last_exc, httpx.HTTPStatusError):
-                return last_exc.response.status_code, f"{prefix}: {last_exc.response.status_code}"
-            return 502, f"{prefix}: {exc}"
-        if isinstance(exc, httpx.HTTPStatusError):
-            return exc.response.status_code, f"{prefix}: {exc.response.status_code}"
-        return 502, f"{prefix}: {exc}"
-
-    async with httpx.AsyncClient() as client:
-        try:
-            teams = await list_user_teams(client, token)
-        except (httpx.HTTPStatusError, RetryError) as e:
-            status_code, detail = _extract_error("Error listando equipos", e)
-            if status_code in (403, 404):
-                return {"teams": [], "count": 0, "errors": [detail]}
-            raise HTTPException(status_code=status_code, detail=detail)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Error listando equipos: {e}")
-
-        enriched_teams: list[dict] = []
-        file_keys: list[str] = []
-        team_projects_cache: list[tuple[dict, list[dict]]]
-        team_projects_cache = []
-        errors: list[str] = []
-
-        for team in teams:
-            team_id = team.get("id") or team.get("team_id") or team.get("teamId")
-            if not team_id:
-                continue
-            try:
-                projects = await list_team_projects(client, token, team_id)
-            except (httpx.HTTPStatusError, RetryError) as e:
-                status_code, detail = _extract_error(f"No se pudieron obtener proyectos del equipo {team_id}", e)
-                errors.append(detail)
-                continue
-            except Exception as e:
-                errors.append(f"No se pudieron obtener proyectos del equipo {team_id}: {e}")
-                continue
-
-            project_entries: list[dict] = []
-            for proj in projects:
-                proj_id = proj.get("id") or proj.get("project_id")
-                if not proj_id:
-                    continue
-                try:
-                    files = await list_project_files(client, token, proj_id)
-                except (httpx.HTTPStatusError, RetryError) as e:
-                    status_code, detail = _extract_error(f"No se pudieron obtener archivos del proyecto {proj_id}", e)
-                    errors.append(detail)
-                    continue
-                except Exception as e:
-                    errors.append(f"No se pudieron obtener archivos del proyecto {proj_id}: {e}")
-                    continue
-                file_entries: list[dict] = []
-                for f in files:
-                    key = f.get("key")
-                    if key:
-                        file_keys.append(key)
-                    file_entries.append(
-                        {
-                            "key": key,
-                            "name": f.get("name"),
-                            "thumbnail_url": f.get("thumbnail_url"),
-                            "last_modified": f.get("last_modified"),
-                        }
-                    )
-                project_entries.append(
-                    {
-                        "id": proj_id,
-                        "name": proj.get("name"),
-                        "files": file_entries,
-                    }
-                )
-            team_projects_cache.append((team, project_entries))
-
-        summary = get_analysis_summary_by_file(file_keys) if file_keys else {}
-
-        for team, projects in team_projects_cache:
-            team_id = team.get("id") or team.get("team_id") or team.get("teamId")
-            team_entry = {
-                "id": team_id,
-                "name": team.get("name"),
-                "role": team.get("role"),
-                "projects": [],
-            }
-            for proj in projects:
-                files_with_summary = []
-                for f in proj["files"]:
-                    key = f.get("key")
-                    analysis_data = summary.get(key, {"runs": 0, "last_run_at": None, "last_analysis_id": None}) if key else None
-                    files_with_summary.append({**f, "analysis": analysis_data})
-                team_entry["projects"].append({**proj, "files": files_with_summary})
-            enriched_teams.append(team_entry)
-
-    return {"teams": enriched_teams, "count": len(enriched_teams), "errors": errors}
+    filename = f"analysis_{analysis_id}.xlsx"
+    return FileResponse(
+        tmp_path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        background=BackgroundTask(_cleanup, tmp_path),
+    )

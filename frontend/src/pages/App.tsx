@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+/// <reference types="vite/client" />
+
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Alert,
-  Badge,
   Button,
   Card,
-  Collapse,
   Checkbox,
   Divider,
   Form,
@@ -37,6 +37,7 @@ import {
   LoginOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
 
 const { Header, Sider, Content, Footer } = Layout
@@ -130,33 +131,198 @@ type JobStatus = {
   analysis?: AnalysisDetail
 }
 
-type FigmaFileEntry = {
-  key?: string
-  name?: string
-  thumbnail_url?: string
-  last_modified?: string
-  project?: { id?: string; name?: string }
-  analysis?: {
-    runs: number
-    last_run_at: string | null
-    last_analysis_id: number | null
-  } | null
+type HistoryFileEntry = {
+  file_key: string
+  figma_url?: string | null
+  runs: number
+  last_run_at?: string | null
+  last_analysis_id?: number | null
+  last_model?: string | null
+  analysis_level?: string | null
 }
 
-type FigmaProjectEntry = {
-  id?: string
-  name?: string
-  files: FigmaFileEntry[]
-}
-
-type FigmaTeamEntry = {
-  id?: string
-  name?: string
-  role?: string
-  projects: FigmaProjectEntry[]
+type HistoryItem = {
+  key: string
+  analysis: AnalysisSummary | null
+  metrics: HistoryFileEntry | null
 }
 
 type EvaluationUpdate = Partial<CaseEvaluation & { notes: string | null }>
+
+const SIDE_TABS_STYLES = `
+  .sider-container {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(180deg, #f6f8ff 0%, #ffffff 100%);
+    border-right: 1px solid #e5e7f0;
+  }
+  .sider-config {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 20px 22px 18px;
+  }
+  .sider-config .ant-space,
+  .sider-config .ant-form {
+    width: 100%;
+  }
+  .sider-container .history-card {
+    background: #ffffff;
+    border-radius: 16px;
+    border: 1px solid #e5e7f0;
+    box-shadow: 0 10px 40px rgba(15, 23, 42, 0.08);
+    margin: 0 16px 16px;
+    display: flex;
+    flex-direction: column;
+  }
+  .history-card .ant-card-head {
+    border-bottom: none;
+    padding: 16px;
+  }
+  .history-card .ant-card-head-title {
+    font-weight: 600;
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .history-card .ant-card-body {
+    padding: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .history-card .ant-card-extra button {
+    border-radius: 999px !important;
+    padding-inline: 14px;
+  }
+  .history-card .history-list .ant-list-items {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .history-card .history-list .ant-list-item {
+    flex: 0 0 auto;
+  }
+  .history-card .history-list .ant-list-pagination {
+    margin: 10px 16px 16px;
+  }
+  .sider-tabs.ant-tabs {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 0 16px 20px;
+  }
+  .sider-tabs .ant-tabs-content-holder {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .sider-tabs .ant-tabs-content {
+    flex: 1;
+  }
+  .sider-tabs .ant-tabs-tabpane {
+    height: 100%;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .sider-tabs .ant-tabs-nav {
+    margin: auto auto 10px !important;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid #dfe6fb;
+    box-shadow: 0 6px 18px rgba(30, 64, 175, 0.08);
+  }
+  .sider-tabs .ant-tabs-nav::before {
+    border-bottom: none;
+  }
+  .sider-tabs .ant-tabs-nav-wrap {
+    justify-content: center;
+  }
+  .sider-tabs .ant-tabs-tab {
+    margin: 0 6px !important;
+    border-radius: 12px;
+    padding: 10px 20px;
+    transition: all 0.18s ease;
+    color: #4a5568;
+  }
+  .sider-tabs .ant-tabs-tab:hover {
+    color: #1d39c4;
+    background: rgba(29, 57, 196, 0.08);
+  }
+  .sider-tabs .ant-tabs-tab-active {
+    background: #ffffff;
+    border: 1px solid #c9d6f8;
+    box-shadow: 0 5px 14px rgba(28, 55, 160, 0.12);
+  }
+  .sider-tabs .ant-tabs-tab-btn {
+    font-weight: 500;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    letter-spacing: 0.18px;
+    padding-inline: 2px;
+  }
+  .sider-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+    color: #1d39c4 !important;
+  }
+  .sider-tabs .ant-tabs-tab-btn .tab-label-icon {
+    font-size: 15px;
+  }
+  .sider-tabs .ant-tabs-ink-bar {
+    display: none;
+  }
+  .history-list .ant-list-item {
+    align-items: flex-start;
+    padding: 16px 20px;
+    border-bottom: 1px solid #eef2ff;
+  }
+  .history-list .ant-list-item:last-child {
+    border-bottom: none;
+  }
+  .history-list .ant-list-item-meta {
+    width: 100%;
+  }
+  .history-list .ant-list-item-meta-title {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+  .history-list .ant-list-item-meta-description {
+    color: #6b7280;
+    font-size: 13px;
+  }
+  .history-list .ant-list-item-action {
+    margin-inline-start: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .history-list .ant-tag {
+    font-size: 12px;
+    border-radius: 999px;
+  }
+  .cases-table .ant-table-pagination {
+    margin: 12px 24px 18px;
+    justify-content: flex-end;
+  }
+  .cases-table .ant-table-thead > tr > th {
+    background: #f1f5ff;
+    font-weight: 600;
+  }
+  .cases-table .ant-table-tbody > tr.cases-row-even > td {
+    background: #f9fbff;
+  }
+  .cases-table .ant-table-tbody > tr:hover > td {
+    background: #eef2ff !important;
+  }
+` as const
 
 const STATUS_OPTIONS = [
   { label: 'Pendiente', value: 'pending' },
@@ -315,19 +481,45 @@ export default function App() {
   const [selectedAnalysis, setSelectedAnalysis] = useState<AnalysisDetail | null>(null)
   const [selectedAnalysisId, setSelectedAnalysisId] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState('config')
-  const [figmaTeams, setFigmaTeams] = useState<FigmaTeamEntry[]>([])
-  const [figmaTeamsLoading, setFigmaTeamsLoading] = useState(false)
-  const [figmaScopeLimited, setFigmaScopeLimited] = useState(false)
-  const [figmaFiles, setFigmaFiles] = useState<FigmaFileEntry[]>([])
-  const [figmaLoading, setFigmaLoading] = useState(false)
-  const [figmaTeamId, setFigmaTeamId] = useState('')
-  const [figmaProjectId, setFigmaProjectId] = useState('')
+  const [historyFiles, setHistoryFiles] = useState<HistoryFileEntry[]>([])
+  const [historyFilesLoading, setHistoryFilesLoading] = useState(false)
+  const [historyFilesError, setHistoryFilesError] = useState<string | null>(null)
+  const [casesPageSize, setCasesPageSize] = useState(15)
   const pollRef = useRef<number | null>(null)
   const [form] = Form.useForm()
   const analysisLevel = Form.useWatch('analysis_level', form)
 
   const rows = useMemo(() => buildRowsFromAnalysis(selectedAnalysis), [selectedAnalysis])
   const evaluationStats = useMemo(() => calculateEvaluationStats(selectedAnalysis), [selectedAnalysis])
+  const historyFilesMap = useMemo(() => {
+    const map = new Map<string, HistoryFileEntry>()
+    historyFiles.forEach((file) => {
+      if (file.file_key) {
+        map.set(file.file_key, file)
+      }
+    })
+    return map
+  }, [historyFiles])
+
+  const historyItems = useMemo<HistoryItem[]>(() => {
+    const items: HistoryItem[] = analyses.map((analysis) => ({
+      key: `analysis-${analysis.analysis_id}`,
+      analysis,
+      metrics: historyFilesMap.get(analysis.file_key) || null,
+    }))
+    historyFiles.forEach((file) => {
+      const alreadyIncluded = items.some((item) => item.analysis?.file_key === file.file_key)
+      if (!alreadyIncluded) {
+        items.push({ key: `file-${file.file_key}`, analysis: null, metrics: file })
+      }
+    })
+    items.sort((a, b) => {
+      const dateA = new Date(a.analysis?.updated_at || a.metrics?.last_run_at || 0).getTime()
+      const dateB = new Date(b.analysis?.updated_at || b.metrics?.last_run_at || 0).getTime()
+      return dateB - dateA
+    })
+    return items
+  }, [analyses, historyFiles, historyFilesMap])
 
   const refreshAnalyses = useCallback(async () => {
     setHistoryLoading(true)
@@ -342,6 +534,27 @@ export default function App() {
       message.error('No se pudieron cargar los análisis previos')
     } finally {
       setHistoryLoading(false)
+    }
+  }, [])
+
+  const fetchHistoryFiles = useCallback(async () => {
+    setHistoryFilesLoading(true)
+    setHistoryFilesError(null)
+    try {
+      const res = await fetch(`${API_BASE}/history/files`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || res.statusText)
+      }
+      const data = await res.json()
+      setHistoryFiles(Array.isArray(data.files) ? data.files : [])
+    } catch (err: any) {
+      console.error('History files error', err)
+      const msg = err?.message ? String(err.message) : 'No se pudo obtener el historial de archivos'
+      setHistoryFilesError(msg)
+      message.error('No se pudo cargar el historial de archivos analizados')
+    } finally {
+      setHistoryFilesLoading(false)
     }
   }, [])
 
@@ -465,6 +678,7 @@ export default function App() {
             pollRef.current = null
             message.success('Análisis completado')
             refreshAnalyses()
+            fetchHistoryFiles()
             if (js.analysis) {
               const normalized = normalizeAnalysis(js.analysis)
               setSelectedAnalysis(normalized)
@@ -483,7 +697,7 @@ export default function App() {
       }, 2000) as unknown as number
       pollRef.current = poll
     },
-    [loadAnalysis, refreshAnalyses],
+    [loadAnalysis, refreshAnalyses, fetchHistoryFiles],
   )
 
   const onConnect = async () => {
@@ -621,97 +835,67 @@ export default function App() {
     }
   }
 
-  const fetchFigmaTeams = useCallback(async () => {
-    if (!token) {
-      setFigmaTeams([])
-      return
-    }
-    setFigmaTeamsLoading(true)
-    try {
-      const res = await fetch(`${API_BASE}/figma/teams`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || res.statusText)
-      }
-      const data = await res.json()
-      let scopeIssue = false
-      if (Array.isArray(data.errors) && data.errors.length) {
-        scopeIssue = data.errors.some((msg: string) => msg.includes('403') || msg.includes('404'))
-        if (scopeIssue) {
-          message.warning('Conecta con Figma mediante OAuth con permisos file_read, projects:read y organization:read para ver todos tus equipos.')
-        } else {
-          message.warning(`Algunos recursos de Figma no se pudieron obtener: ${data.errors.join('; ')}`)
-        }
-      }
-      setFigmaScopeLimited(scopeIssue)
-      setFigmaTeams(Array.isArray(data.teams) ? data.teams : [])
-      if (!scopeIssue) {
-        setFigmaFiles([])
-      }
-    } catch (err: any) {
-      console.error('Figma teams error', err)
-      message.error('No se pudieron obtener los equipos y archivos de Figma. Reautentica con OAuth si es necesario.')
-      if (err?.message?.includes('403') || err?.message?.includes('404')) {
-        setFigmaScopeLimited(true)
-      }
-    } finally {
-      setFigmaTeamsLoading(false)
-    }
-  }, [token])
-
-  const fetchFigmaFiles = useCallback(async () => {
-    if (!token) {
-      message.warning('Conecta o pega un Access Token para consultar Figma')
-      return
-    }
-    if (!figmaTeamId && !figmaProjectId) {
-      message.warning('Ingresa un Team ID o Project ID de Figma')
-      return
-    }
-    setFigmaLoading(true)
-    try {
-      const params = new URLSearchParams()
-      if (figmaTeamId) params.append('team_id', figmaTeamId)
-      if (figmaProjectId) params.append('project_id', figmaProjectId)
-      const res = await fetch(`${API_BASE}/figma/files?${params.toString()}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
-      if (!res.ok) throw new Error(await res.text())
-      const data = await res.json()
-      setFigmaFiles(Array.isArray(data.files) ? data.files : [])
-    } catch (err: any) {
-      console.error('Figma files error', err)
-      message.error('No se pudieron obtener los archivos de Figma con los identificadores provistos')
-    } finally {
-      setFigmaLoading(false)
-    }
-  }, [token, figmaTeamId, figmaProjectId])
-
   useEffect(() => {
-    if (token) {
-      fetchFigmaTeams()
-    } else {
-      setFigmaTeams([])
-      setFigmaScopeLimited(false)
-      setFigmaFiles([])
-    }
-  }, [token, fetchFigmaTeams])
+    fetchHistoryFiles()
+  }, [fetchHistoryFiles])
 
-  const handleUseFigmaFile = (file: FigmaFileEntry) => {
-    if (!file.key) return
+  const handleUseHistoryFile = (file: HistoryFileEntry) => {
+    if (!file.file_key) return
     form.setFieldsValue({
-      file_key: file.key,
-      figma_url: `https://www.figma.com/file/${file.key}`,
+      file_key: file.file_key,
+      figma_url: file.figma_url || `https://www.figma.com/file/${file.file_key}`,
     })
     setActiveTab('config')
     message.success('Archivo cargado en el formulario')
   }
+
+  const handleDeleteCase = useCallback(
+    async (caseId: number) => {
+      if (!selectedAnalysisId) return
+      try {
+        const res = await fetch(`${API_BASE}/analyses/${selectedAnalysisId}/cases/${caseId}`, {
+          method: 'DELETE',
+        })
+        if (!res.ok) throw new Error(await res.text())
+        message.success('Caso eliminado')
+        setSelectedAnalysis((prev) => {
+          if (!prev) return prev
+          const filtered = prev.cases.filter((item) => item.evaluation.case_id !== caseId)
+          return {
+            ...prev,
+            cases: filtered,
+            total_cases: Math.max((prev.total_cases || 0) - 1, 0),
+          }
+        })
+        refreshAnalyses()
+      } catch (err: any) {
+        console.error('Delete case error', err)
+        message.error('No se pudo eliminar el caso seleccionado')
+      }
+    },
+    [selectedAnalysisId, refreshAnalyses],
+  )
+
+  const handleExportAnalysis = useCallback(async () => {
+    if (!selectedAnalysisId) return
+    try {
+      const res = await fetch(`${API_BASE}/analyses/${selectedAnalysisId}/export`)
+      if (!res.ok) throw new Error(await res.text())
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `analisis_${selectedAnalysisId}.xlsx`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.URL.revokeObjectURL(url)
+      message.success('Descarga lista')
+    } catch (err: any) {
+      console.error('Export analysis error', err)
+      message.error('No se pudo descargar el Excel del análisis')
+    }
+  }, [selectedAnalysisId])
 
   const columns: ColumnsType<CaseRow> = useMemo(
     () => [
@@ -849,12 +1033,13 @@ export default function App() {
         title: 'Notas del evaluador',
         dataIndex: 'evaluation.notes',
         key: 'evaluation.notes',
-        width: 240,
+        width: 320,
         render: (_: unknown, record) => (
           <Input.TextArea
-            autoSize={{ minRows: 1, maxRows: 4 }}
+            autoSize={{ minRows: 2, maxRows: 6 }}
             value={record.evaluation.notes ?? ''}
             placeholder="Observaciones"
+            style={{ minWidth: 280 }}
             onChange={(event) => {
               applyEvaluationLocal(record.caseId, { notes: event.target.value || null })
             }}
@@ -865,30 +1050,67 @@ export default function App() {
           />
         ),
       },
+      {
+        title: 'Acciones',
+        key: 'actions',
+        fixed: 'right',
+        width: 120,
+        render: (_: unknown, record) => (
+          <Space size={8}>
+            <Popconfirm
+              title="Eliminar caso"
+              description="Esta acción quitará el caso del análisis"
+              okText="Eliminar"
+              cancelText="Cancelar"
+              onConfirm={() => handleDeleteCase(record.caseId)}
+            >
+              <Button danger size="small" icon={<DeleteOutlined />} />
+            </Popconfirm>
+          </Space>
+        ),
+      },
     ],
-    [applyEvaluationLocal, getCaseById, handleEvaluationSave],
+    [applyEvaluationLocal, getCaseById, handleEvaluationSave, handleDeleteCase],
   )
 
   const tokenStatus = useMemo(() => (token ? 'Conectado con Figma' : 'No conectado'), [token])
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Sider width={380} theme="light" style={{ padding: 0, borderRight: '1px solid #f0f0f0', overflow: 'auto' }}>
-        <Tabs
-          activeKey={activeTab}
-          onChange={setActiveTab}
-          items={[
-            {
-              key: 'config',
-              label: 'Configurar',
-              children: (
-                <div style={{ padding: 24 }}>
-                  <Space direction="vertical" size="large" style={{ width: '100%' }}>
-                    <Space align="center" style={{ justifyContent: 'space-between', width: '100%' }}>
+    <>
+      <style>{SIDE_TABS_STYLES}</style>
+      <Layout style={{ minHeight: '100vh' }}>
+        <Sider
+          width={390}
+          theme="light"
+          style={{ padding: 0, background: 'transparent', display: 'flex', flexDirection: 'column' }}
+        >
+          <div className="sider-container">
+            <Tabs
+              className="sider-tabs"
+              activeKey={activeTab}
+              onChange={setActiveTab}
+              centered
+              size="middle"
+              tabBarGutter={32}
+              animated={{ inkBar: false, tabPane: true }}
+              tabPosition="bottom"
+              style={{ flex: 1, display: 'flex', flexDirection: 'column' }}
+              items={[
+              {
+                key: 'config',
+                label: (
+                  <Space size={10} align="center">
+                    <SettingOutlined className="tab-label-icon" />
+                    <span>Configurar</span>
+                  </Space>
+                ),
+                children: (
+                  <div className="sider-config">
+                    <Space align="center" style={{ justifyContent: 'space-between' }}>
                       <Title level={4} style={{ margin: 0 }}>
                         <CloudUploadOutlined style={{ marginRight: 8 }} /> Figma QA
                       </Title>
-                      <Button icon={<LoginOutlined />} type="primary" onClick={onConnect}>
+                      <Button icon={<LoginOutlined />} type="primary" onClick={onConnect} shape="round">
                         Conectar
                       </Button>
                     </Space>
@@ -969,82 +1191,168 @@ export default function App() {
                         </Button>
                       </Form.Item>
                     </Form>
+                  </div>
+                ),
+              },
+              {
+                key: 'history',
+                label: (
+                  <Space size={10} align="center">
+                    <HistoryOutlined className="tab-label-icon" />
+                    <span>Historial</span>
                   </Space>
-                </div>
-              ),
-            },
-            {
-              key: 'history',
-              label: 'Historial',
-              children: (
-                <div style={{ padding: 24 }}>
-                  <Space direction="vertical" size="large" style={{ width: '100%' }}>
+                ),
+                children: (
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '18px 16px 12px' }}>
                     <Card
+                      className="history-card"
+                      size="small"
+                      styles={{ body: { padding: 0 } }}
                       title={
                         <Space>
-                          <HistoryOutlined /> Historial de análisis
+                          <HistoryOutlined /> Historial
                         </Space>
                       }
                       extra={
-                        <Button size="small" icon={<ReloadOutlined />} onClick={refreshAnalyses} loading={historyLoading}>
-                          Actualizar
-                        </Button>
+                        <Space size={8}>
+                          <Button
+                            size="small"
+                            icon={<ReloadOutlined />}
+                            loading={historyLoading || historyFilesLoading}
+                            onClick={() => {
+                              refreshAnalyses()
+                              fetchHistoryFiles()
+                            }}
+                            shape="round"
+                          >
+                            Actualizar
+                          </Button>
+                        </Space>
                       }
-                      size="small"
-                      styles={{ body: { padding: 0 } }}
                     >
+                      {historyFilesError && (
+                        <Alert
+                          type="warning"
+                          showIcon
+                          style={{ margin: '16px 16px 0' }}
+                          message="No se pudo obtener el historial"
+                          description={<Text type="secondary">{historyFilesError}</Text>}
+                        />
+                      )}
                       <List
-                        loading={historyLoading}
-                        dataSource={analyses}
-                        locale={{ emptyText: 'Aún no hay análisis guardados' }}
+                        className="history-list"
+                        loading={historyLoading || historyFilesLoading}
+                        dataSource={historyItems}
+                        locale={{ emptyText: 'Aún no hay ejecuciones registradas en este entorno.' }}
+                        pagination={{ pageSize: 6, size: 'small' }}
+                        style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}
                         renderItem={(item) => {
-                          const selected = selectedAnalysisId === item.analysis_id
+                          const analysis = item.analysis
+                          const metrics = item.metrics
+                          const selected = analysis ? selectedAnalysisId === analysis.analysis_id : false
+                          const fileKey = analysis?.file_key || metrics?.file_key || 'Desconocido'
+
+                          const actions: ReactNode[] = []
+                          if (analysis) {
+                            actions.push(
+                              <Button
+                                key="view"
+                                size="small"
+                                icon={<FileSearchOutlined />}
+                                type={selected ? 'primary' : 'default'}
+                                onClick={() => loadAnalysis(analysis.analysis_id, { focusTab: false })}
+                                shape="round"
+                              >
+                                Ver
+                              </Button>,
+                            )
+                            actions.push(
+                              <Button
+                                key="rerun"
+                                size="small"
+                                icon={<ReloadOutlined />}
+                                onClick={() => handleRerunAnalysis(analysis.analysis_id)}
+                                shape="round"
+                              >
+                                Re-ejecutar
+                              </Button>,
+                            )
+                            actions.push(
+                              <Popconfirm
+                                key="delete"
+                                title="Eliminar análisis"
+                                description="Esta acción borrará los resultados guardados"
+                                onConfirm={() => handleDeleteAnalysis(analysis.analysis_id)}
+                              >
+                                <Button danger size="small" icon={<DeleteOutlined />} shape="round">Borrar</Button>
+                              </Popconfirm>,
+                            )
+                          }
+                          if (metrics) {
+                            actions.push(
+                              <Button
+                                key="use"
+                                size="small"
+                                type="dashed"
+                                onClick={() => handleUseHistoryFile(metrics)}
+                                shape="round"
+                              >
+                                Usar archivo
+                              </Button>,
+                            )
+                            if (metrics.figma_url) {
+                              actions.push(
+                                <Button
+                                  key="figma"
+                                  size="small"
+                                  type="link"
+                                  href={metrics.figma_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  shape="round"
+                                >
+                                  Abrir en Figma
+                                </Button>,
+                              )
+                            }
+                          }
+
+                          const tagRow = (
+                            <Space size={8} wrap>
+                              {analysis && <Tag color="blue">{analysis.analysis_level}</Tag>}
+                              {analysis && <Tag color="gold">{analysis.total_cases} casos</Tag>}
+                              {(analysis?.model || metrics?.last_model) && (
+                                <Tag color="purple">{analysis?.model || metrics?.last_model}</Tag>
+                              )}
+                              {metrics?.runs && <Tag color="geekblue">{metrics.runs} ejecuciones</Tag>}
+                              {selected && <Tag color="geekblue">Seleccionado</Tag>}
+                            </Space>
+                          )
+
+                          const actionItems = actions.filter(Boolean) as ReactNode[]
+                          const lastRunLabel = analysis?.updated_at || metrics?.last_run_at
+
                           return (
-                            <List.Item
-                              actions={[
-                                <Button
-                                  key="view"
-                                  size="small"
-                                  icon={<FileSearchOutlined />}
-                                  type={selected ? 'primary' : 'default'}
-                                  onClick={() => loadAnalysis(item.analysis_id, { focusTab: false })}
-                                >
-                                  Ver
-                                </Button>,
-                                <Button
-                                  key="rerun"
-                                  size="small"
-                                  icon={<ReloadOutlined />}
-                                  onClick={() => handleRerunAnalysis(item.analysis_id)}
-                                >
-                                  Re-ejecutar
-                                </Button>,
-                                <Popconfirm
-                                  key="delete"
-                                  title="Eliminar análisis"
-                                  description="Esta acción borrará los resultados guardados"
-                                  onConfirm={() => handleDeleteAnalysis(item.analysis_id)}
-                                >
-                                  <Button danger size="small" icon={<DeleteOutlined />}>Borrar</Button>
-                                </Popconfirm>,
-                              ]}
-                            >
+                            <List.Item key={item.key} actions={actionItems}>
                               <List.Item.Meta
                                 title={
-                                  <Space>
-                                    <Text strong>{item.file_key}</Text>
-                                    <Tag color="blue">{item.analysis_level}</Tag>
-                                    {selected && <Tag color="geekblue">Seleccionado</Tag>}
+                                  <Space size={8} wrap>
+                                    <Text strong style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {fileKey}
+                                    </Text>
+                                    {tagRow}
                                   </Space>
                                 }
                                 description={
                                   <Space direction="vertical" size={4}>
-                                    <Text type="secondary">{formatDate(item.created_at)}</Text>
-                                    <Space size={8}>
-                                      <Tag color="gold">{item.total_cases} casos</Tag>
-                                      <Tag>{item.model}</Tag>
-                                      {item.reasoning_effort && <Tag color="purple">{item.reasoning_effort}</Tag>}
-                                    </Space>
+                                    {lastRunLabel && (
+                                      <Text type="secondary">Último análisis: {formatDate(lastRunLabel)}</Text>
+                                    )}
+                                    {metrics?.figma_url && (
+                                      <Text type="secondary" ellipsis={{ tooltip: metrics.figma_url }}>
+                                        URL: {metrics.figma_url}
+                                      </Text>
+                                    )}
                                   </Space>
                                 }
                               />
@@ -1053,286 +1361,142 @@ export default function App() {
                         }}
                       />
                     </Card>
-
-                    <Card
-                      title={
-                        <Space>
-                          <FileSearchOutlined /> Recursos de Figma
-                        </Space>
-                      }
-                      size="small"
-                      extra={
-                        <Button size="small" icon={<ReloadOutlined />} loading={figmaTeamsLoading} onClick={fetchFigmaTeams}>
-                          Actualizar
-                        </Button>
-                      }
-                    >
-                      {figmaTeamsLoading ? (
-                        <Spin />
-                      ) : figmaTeams.length === 0 ? (
-                        <Text type="secondary">Conecta con Figma para listar tus equipos y archivos.</Text>
-                      ) : (
-                        <Collapse accordion>
-                          {figmaTeams.map((team) => (
-                            <Collapse.Panel
-                              header={
-                                <Space>
-                                  <Text strong>{team.name || team.id}</Text>
-                                  {team.role && <Tag>{team.role}</Tag>}
-                                  <Tag color="blue">{team.projects.length} proyectos</Tag>
-                                </Space>
-                              }
-                              key={team.id || team.name}
-                            >
-                              {team.projects.length === 0 ? (
-                                <Text type="secondary">Este equipo no tiene proyectos visibles.</Text>
-                              ) : (
-                                <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                                  {team.projects.map((project) => (
-                                    <Card
-                                      key={project.id || project.name}
-                                      size="small"
-                                      title={
-                                        <Space>
-                                          <Text strong>{project.name || project.id}</Text>
-                                          <Tag color="gold">{project.files.length} archivos</Tag>
-                                        </Space>
-                                      }
-                                    >
-                                      <List
-                                        dataSource={project.files}
-                                        locale={{ emptyText: 'Sin archivos en este proyecto' }}
-                                        renderItem={(file) => (
-                                          <List.Item
-                                            actions={[
-                                              file.analysis?.last_analysis_id ? (
-                                                <Tooltip
-                                                  key="open"
-                                                  title={`Ver último análisis (${formatDate(file.analysis.last_run_at)})`}
-                                                >
-                                                  <Button
-                                                    size="small"
-                                                    onClick={() => loadAnalysis(file.analysis!.last_analysis_id!, { focusTab: true })}
-                                                  >
-                                                    Abrir resultados
-                                                  </Button>
-                                                </Tooltip>
-                                              ) : null,
-                                              file.key ? (
-                                                <Button
-                                                  key="fill"
-                                                  size="small"
-                                                  type="dashed"
-                                                  onClick={() => handleUseFigmaFile({ ...file, project: { id: project.id, name: project.name } })}
-                                                >
-                                                  Usar archivo
-                                                </Button>
-                                              ) : null,
-                                            ].filter(Boolean)}
-                                          >
-                                            <List.Item.Meta
-                                              title={
-                                                <Space>
-                                                  <Text strong>{file.name || file.key || 'Archivo sin nombre'}</Text>
-                                                  {file.analysis && file.analysis.runs > 0 && (
-                                                    <Badge
-                                                      count={file.analysis.runs}
-                                                      style={{ backgroundColor: '#1890ff' }}
-                                                      offset={[6, -2]}
-                                                    />
-                                                  )}
-                                                </Space>
-                                              }
-                                              description={
-                                                <Space direction="vertical" size={2}>
-                                                  <Text type="secondary">Key: {file.key || '—'}</Text>
-                                                  <Text type="secondary">Proyecto: {project.name || project.id || '—'}</Text>
-                                                  <Text type="secondary">Última modificación: {formatDate(file.last_modified)}</Text>
-                                                </Space>
-                                              }
-                                            />
-                                          </List.Item>
-                                        )}
-                                      />
-                                    </Card>
-                                  ))}
-                                </Space>
-                              )}
-                            </Collapse.Panel>
-                          ))}
-                        </Collapse>
-                      )}
-                      {figmaScopeLimited && (
-                        <Space direction="vertical" size="small" style={{ width: '100%', marginTop: 16 }}>
-                          <Alert
-                            type="info"
-                            showIcon
-                            message="Tu token no tiene permisos organization:read o tu cuenta no pertenece a una organización de Figma. Ingresa manualmente un Team ID o Project ID para cargar los archivos."
-                          />
-                          <Space.Compact style={{ width: '100%' }}>
-                            <Input
-                              placeholder="Team ID"
-                              value={figmaTeamId}
-                              onChange={(event) => setFigmaTeamId(event.target.value)}
-                            />
-                            <Input
-                              placeholder="Project ID"
-                              value={figmaProjectId}
-                              onChange={(event) => setFigmaProjectId(event.target.value)}
-                            />
-                            <Button icon={<HistoryOutlined />} loading={figmaLoading} onClick={fetchFigmaFiles}>
-                              Consultar
-                            </Button>
-                          </Space.Compact>
-                          <List
-                            loading={figmaLoading}
-                            dataSource={figmaFiles}
-                            locale={{ emptyText: 'Ingresa identificadores y presiona Consultar' }}
-                            renderItem={(file) => (
-                              <List.Item
-                                actions={[
-                                  file.analysis?.last_analysis_id ? (
-                                    <Tooltip
-                                      key="open"
-                                      title={`Ver último análisis (${formatDate(file.analysis.last_run_at)})`}
-                                    >
-                                      <Button
-                                        size="small"
-                                        onClick={() => loadAnalysis(file.analysis!.last_analysis_id!, { focusTab: true })}
-                                      >
-                                        Abrir resultados
-                                      </Button>
-                                    </Tooltip>
-                                  ) : null,
-                                  file.key ? (
-                                    <Button
-                                      key="fill"
-                                      size="small"
-                                      type="dashed"
-                                      onClick={() => handleUseFigmaFile({ ...file })}
-                                    >
-                                      Usar archivo
-                                    </Button>
-                                  ) : null,
-                                ].filter(Boolean)}
-                              >
-                                <List.Item.Meta
-                                  title={<Text strong>{file.name || file.key || 'Archivo sin nombre'}</Text>}
-                                  description={
-                                    <Space direction="vertical" size={2}>
-                                      <Text type="secondary">Key: {file.key || '—'}</Text>
-                                      <Text type="secondary">Última modificación: {formatDate(file.last_modified)}</Text>
-                                    </Space>
-                                  }
-                                />
-                              </List.Item>
-                            )}
-                          />
-                        </Space>
-                      )}
-                    </Card>
-                  </Space>
-                </div>
-              ),
-            },
-          ]}
-        />
-      </Sider>
+                  </div>
+                ),
+              },
+            ]}
+            />
+          </div>
+        </Sider>
       <Layout>
         <Header style={{ background: '#fff', borderBottom: '1px solid #f0f0f0', padding: '0 24px' }}>
-          <Space style={{ width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <Title level={3} style={{ margin: 0 }}>
-                Resultados del análisis
-              </Title>
+          <Space style={{ width: '100%', justifyContent: 'space-between', alignItems: 'center', gap: 16 }} wrap>
+            <Title level={3} style={{ margin: 0 }}>
+              Resultados del análisis
+            </Title>
+            <Space size={10} align="center" wrap style={{ flexGrow: 1, justifyContent: 'flex-end' }}>
               {selectedAnalysis && (
-                <Space size={12} style={{ marginTop: 4 }}>
-                  <Tag color="blue">Archivo: {selectedAnalysis.file_key}</Tag>
-                  <Tag icon={<CheckCircleOutlined />} color={evaluationStats.checked === evaluationStats.total ? 'green' : 'gold'}>
+                <>
+                  <Tag color="blue" bordered={false} icon={<FileSearchOutlined />}
+                    style={{ fontSize: 13 }}>
+                    {selectedAnalysis.file_key}
+                  </Tag>
+                  <Tag
+                    icon={<CheckCircleOutlined />}
+                    color={evaluationStats.checked === evaluationStats.total ? 'success' : 'warning'}
+                    bordered={false}
+                    style={{ fontSize: 13 }}
+                  >
                     {evaluationStats.checked}/{evaluationStats.total} completados
                   </Tag>
-                  <Tag color="purple">
+                  <Tag color="purple" bordered={false} style={{ fontSize: 13 }}>
                     Promedio: {evaluationStats.avgScore !== null ? evaluationStats.avgScore.toFixed(1) : '—'}
                   </Tag>
-                </Space>
+                  <Tag color="geekblue" bordered={false} style={{ fontSize: 13 }}>
+                    Casos visibles: {rows.length}
+                  </Tag>
+                </>
               )}
-            </div>
-            <Space>
               {job?.download_url && (
-                <Button icon={<DownloadOutlined />} onClick={handleDownload}>
-                  Descargar Excel
+                <Button icon={<DownloadOutlined />} onClick={handleDownload} shape="round" type="default">
+                  Último Excel
+                </Button>
+              )}
+              {selectedAnalysis && (
+                <Button icon={<DownloadOutlined />} onClick={handleExportAnalysis} shape="round" type="primary">
+                  Exportar todo
                 </Button>
               )}
             </Space>
           </Space>
         </Header>
-        <Content style={{ padding: 24, overflow: 'auto' }}>
-          <Space direction="vertical" size="large" style={{ width: '100%' }}>
-            {job && (
-              <Card size="small" title="Progreso del análisis">
-                <Space direction="vertical" style={{ width: '100%' }}>
+        <Content style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 24, overflow: 'hidden' }}>
+          {job && (
+            <Card size="small" title="Progreso del análisis">
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <div>
+                  <Text strong>Estado:</Text> <Text>{job.status}</Text>
+                </div>
+                {job.stage && (
                   <div>
-                    <Text strong>Estado:</Text> <Text>{job.status}</Text>
+                    <Text strong>Etapa:</Text> <Text>{job.stage}</Text>
                   </div>
-                  {job.stage && (
-                    <div>
-                      <Text strong>Etapa:</Text> <Text>{job.stage}</Text>
-                    </div>
+                )}
+                {job.message && <Alert type="info" message={job.message} showIcon />} 
+                {job.status === 'failed' && (job.error || job.message) && (
+                  <Alert type="error" message={job.error || job.message} showIcon />
+                )}
+                <div>
+                  <Text>
+                    Frames procesados: {job.processed || 0}/{job.frames_processing || job.frames_total || 0}
+                  </Text>
+                </div>
+                <div>
+                  <Text>Casos generados: {job.cases_total || selectedAnalysis?.cases.length || 0}</Text>
+                </div>
+                <Progress
+                  percent={Math.min(
+                    100,
+                    Math.round(((job.processed || 0) / Math.max(1, job.frames_processing || job.frames_total || 1)) * 100),
                   )}
-                  {job.message && <Alert type="info" message={job.message} showIcon />}
-                  {job.status === 'failed' && (job.error || job.message) && (
-                    <Alert type="error" message={job.error || job.message} showIcon />
-                  )}
-                  <div>
-                    <Text>
-                      Frames procesados: {job.processed || 0}/{job.frames_processing || job.frames_total || 0}
-                    </Text>
-                  </div>
-                  <div>
-                    <Text>Casos generados: {job.cases_total || selectedAnalysis?.cases.length || 0}</Text>
-                  </div>
-                  <Progress
-                    percent={Math.min(
-                      100,
-                      Math.round(((job.processed || 0) / Math.max(1, job.frames_processing || job.frames_total || 1)) * 100),
-                    )}
-                    status={job.status === 'failed' ? 'exception' : undefined}
-                  />
-                </Space>
-              </Card>
-            )}
-
-            {analysisLoading && (
-              <Card size="small">
-                <Spin /> Cargando análisis seleccionado…
-              </Card>
-            )}
-
-            {!selectedAnalysis && !analysisLoading && (
-              <Alert
-                type="info"
-                message="Selecciona un análisis desde el historial o ejecuta uno nuevo para visualizar los casos"
-                showIcon
-              />
-            )}
-
-            {selectedAnalysis && (
-              <Card size="small" title={`Casos de prueba (${rows.length})`} styles={{ body: { padding: 0 } }}>
-                <Table
-                  rowKey="rowKey"
-                  columns={columns}
-                  dataSource={rows}
-                  pagination={{ pageSize: 20, showSizeChanger: true }}
-                  scroll={{ x: 'max-content', y: 'calc(100vh - 360px)' }}
-                  locale={{ emptyText: 'Sin casos disponibles' }}
+                  status={job.status === 'failed' ? 'exception' : undefined}
                 />
+              </Space>
+            </Card>
+          )}
+
+          {analysisLoading && (
+            <Card size="small">
+              <Spin /> Cargando análisis seleccionado…
+            </Card>
+          )}
+
+          {!selectedAnalysis && !analysisLoading && (
+            <Alert
+              type="info"
+              message="Selecciona un análisis desde el historial o ejecuta uno nuevo para visualizar los casos"
+              showIcon
+            />
+          )}
+
+          {selectedAnalysis && (
+            <Card
+              size="small"
+              title={`Casos de prueba (${rows.length})`}
+              extra={
+                <Space>
+                  <Button icon={<DownloadOutlined />} onClick={handleExportAnalysis} size="small" shape="round">
+                    Descargar Excel
+                  </Button>
+                </Space>
+              }
+              style={{ flex: 1, minHeight: 0 }}
+              styles={{ body: { padding: 0, height: '100%', display: 'flex', flexDirection: 'column' } }}
+            >
+              <Table
+                className="cases-table"
+                rowKey="rowKey"
+                columns={columns}
+                dataSource={rows}
+                pagination={{
+                  pageSize: casesPageSize,
+                  showSizeChanger: true,
+                  pageSizeOptions: ['10', '15', '20', '50'],
+                  onChange: (_, pageSize) => setCasesPageSize(pageSize),
+                  position: ['bottomRight'],
+                }}
+                scroll={{ x: 'max-content', y: 'calc(100vh - 420px)' }}
+                locale={{ emptyText: 'Sin casos disponibles' }}
+                style={{ flex: 1 }}
+                rowClassName={(_, index) => (index % 2 === 0 ? 'cases-row-even' : '')}
+              />
               </Card>
             )}
-          </Space>
         </Content>
         <Footer style={{ textAlign: 'center' }}>Figma QA © {new Date().getFullYear()}</Footer>
       </Layout>
-    </Layout>
+      </Layout>
+    </>
   )
 }
 
